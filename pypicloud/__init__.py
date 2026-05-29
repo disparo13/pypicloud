@@ -65,9 +65,7 @@ def includeme(config):
     # manually delete the cookie.
     settings.setdefault("session.invalidate_corrupt", "true")
     config.include("pyramid_beaker")
-    config.include("pyramid_duh")
-    config.include("pyramid_duh.auth")
-    config.include("pyramid_rpc.xmlrpc")
+    config.include("pypicloud.predicates")
 
     # Sometimes we need to run things after uWSGI forks.
     config.registry.postfork_hooks = []
@@ -193,12 +191,8 @@ def includeme(config):
         cache_max_age=cache_max_age,
     )
 
-    config.add_xmlrpc_endpoint(
-        "pypi", "/pypi", request_method="POST", header="Content-Type:text/xml"
-    )
-    config.add_xmlrpc_endpoint(
-        "pypi_slash", "/pypi/", request_method="POST", header="Content-Type:text/xml"
-    )
+    config.add_route("xmlrpc_pypi", "/pypi")
+    config.add_route("xmlrpc_pypi_slash", "/pypi/")
 
 
 def main(config, **settings):

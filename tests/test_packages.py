@@ -1,5 +1,5 @@
 """ Unit tests for the packages endpoints """
-from mock import MagicMock
+from unittest.mock import MagicMock
 
 from pypicloud.views.packages import list_packages
 

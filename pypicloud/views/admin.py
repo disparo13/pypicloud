@@ -7,7 +7,7 @@ from paste.httpheaders import CONTENT_DISPOSITION  # pylint: disable=E0611
 from pyramid.httpexceptions import HTTPBadRequest
 from pyramid.response import FileIter
 from pyramid.view import view_config, view_defaults
-from pyramid_duh import argify
+from pypicloud.compat import argify
 
 from pypicloud.route import AdminResource
 

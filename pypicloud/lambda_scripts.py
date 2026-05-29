@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from distutils.spawn import find_executable  # pylint: disable=E0611,F0401
+from shutil import which
 from urllib.request import urlretrieve
 
 import boto3
@@ -166,7 +166,7 @@ def _create_default_role(settings, bucket):
 
 def make_virtualenv(env):
     """Create a virtualenv"""
-    if find_executable("virtualenv") is not None:
+    if which("virtualenv") is not None:
         cmd = ["virtualenv"] + [env]
         subprocess.check_call(cmd)
     else:

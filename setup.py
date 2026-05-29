@@ -22,18 +22,17 @@ REQUIREMENTS = [
     "passlib>=1.7",
     "pyramid>=2",
     "pyramid_beaker",
-    "pyramid_duh",
     "pyramid_jinja2",
-    "pyramid_rpc",
     "pyramid_tm",
     "requests",
+    "sqlalchemy>=2.0",
     "transaction",
-    "zope.sqlalchemy",
+    "zope.sqlalchemy>=2.0",
 ]
 
 EXTRAS = {
     "ldap": ["python-ldap"],
-    "dynamo": ["flywheel>=0.2.0"],
+    "dynamo": ["pynamodb>=6.0"],
     "redis": ["redis"],
     "gcs": [
         "google-cloud-storage>=1.10.0",
@@ -59,9 +58,10 @@ if __name__ == "__main__":
         classifiers=[
             "Programming Language :: Python",
             "Programming Language :: Python :: 3",
-            "Programming Language :: Python :: 3.7",
-            "Programming Language :: Python :: 3.8",
-            "Programming Language :: Python :: 3.9",
+            "Programming Language :: Python :: 3.11",
+            "Programming Language :: Python :: 3.12",
+            "Programming Language :: Python :: 3.13",
+            "Programming Language :: Python :: 3.14",
             "Development Status :: 4 - Beta",
             "Framework :: Pyramid",
             "Intended Audience :: System Administrators",
@@ -77,7 +77,7 @@ if __name__ == "__main__":
         keywords="pypi s3 cheeseshop package",
         platforms="any",
         zip_safe=False,
-        python_requires=">=3.7",
+        python_requires=">=3.11",
         include_package_data=True,
         packages=find_packages(exclude=("tests",)),
         entry_points={
@@ -95,7 +95,5 @@ if __name__ == "__main__":
             "paste.app_factory": ["main = pypicloud:main"],
         },
         install_requires=REQUIREMENTS,
-        tests_require=REQUIREMENTS + REQUIREMENTS_TEST,
-        test_suite="tests",
         extras_require=EXTRAS,
     )

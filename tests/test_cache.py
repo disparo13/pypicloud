@@ -7,9 +7,8 @@ from io import BytesIO
 
 import redis
 import transaction
-from dynamo3 import Throughput
-from flywheel.fields.types import UTC
-from mock import ANY, MagicMock, patch
+from pypicloud.dateutil import UTC
+from unittest.mock import ANY, MagicMock, patch
 from pyramid.testing import DummyRequest
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
@@ -778,6 +777,8 @@ class TestDynamoCache(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super(TestDynamoCache, cls).setUpClass()
+        if cls.dynamo is None:
+            raise unittest.SkipTest("DynamoDB local not configured")
         host = cls.dynamo.host[cls.dynamo.host.index("//") + 2 :]
         host, port = host.split(":")
         settings = {
@@ -790,12 +791,13 @@ class TestDynamoCache(unittest.TestCase):
             "db.aws_secret_access_key": "",
         }
         cls.kwargs = DynamoCache.configure(settings)
-        cls.engine = cls.kwargs["engine"]
 
     @classmethod
     def tearDownClass(cls):
         super(TestDynamoCache, cls).tearDownClass()
-        cls.engine.delete_schema()
+        for model_cls in (DynamoPackage, PackageSummary):
+            if model_cls.exists():
+                model_cls.delete_table()
 
     def setUp(self):
         super(TestDynamoCache, self).setUp()
@@ -806,23 +808,25 @@ class TestDynamoCache(unittest.TestCase):
 
     def tearDown(self):
         super(TestDynamoCache, self).tearDown()
-        for model in (DynamoPackage, PackageSummary):
-            self.engine.scan(model).delete()
+        for model_cls in (DynamoPackage, PackageSummary):
+            with model_cls.batch_write() as batch:
+                for item in model_cls.scan():
+                    batch.delete(item)
 
     def _save_pkgs(self, *pkgs):
         """Save a DynamoPackage to the db"""
         for pkg in pkgs:
-            self.engine.save(pkg)
+            pkg.save()
             summary = PackageSummary(pkg)
-            self.engine.save(summary, overwrite=True)
+            summary.save()
 
     def test_upload(self):
         """upload() saves package and uploads to storage"""
         pkg = make_package(factory=DynamoPackage)
         self.db.upload(pkg.filename, BytesIO(b"test1234"), pkg.name, pkg.version)
-        count = self.engine.scan(DynamoPackage).count()
+        count = DynamoPackage.count()
         self.assertEqual(count, 1)
-        saved_pkg = self.engine.scan(DynamoPackage).first()
+        saved_pkg = list(DynamoPackage.scan(limit=1))[0]
         self.assertEqual(saved_pkg, pkg)
         self.storage.upload.assert_called_with(pkg, ANY)
 
@@ -830,9 +834,9 @@ class TestDynamoCache(unittest.TestCase):
         """save() puts object into database"""
         pkg = make_package(factory=DynamoPackage)
         self.db.save(pkg)
-        count = self.engine.scan(DynamoPackage).count()
+        count = DynamoPackage.count()
         self.assertEqual(count, 1)
-        saved_pkg = self.engine.scan(DynamoPackage).first()
+        saved_pkg = list(DynamoPackage.scan(limit=1))[0]
         self.assertEqual(saved_pkg, pkg)
 
     def test_delete(self):
@@ -841,9 +845,9 @@ class TestDynamoCache(unittest.TestCase):
         pkg = make_package(factory=DynamoPackage)
         self._save_pkgs(pkg)
         self.db.delete(pkg)
-        count = self.engine.scan(DynamoPackage).count()
+        count = DynamoPackage.count()
         self.assertEqual(count, 0)
-        count = self.engine.scan(PackageSummary).count()
+        count = PackageSummary.count()
         self.assertEqual(count, 0)
         self.storage.delete.assert_called_with(pkg)
 
@@ -853,9 +857,9 @@ class TestDynamoCache(unittest.TestCase):
         pkg = make_package(factory=DynamoPackage)
         self._save_pkgs(pkg)
         self.db.delete(pkg)
-        count = self.engine.scan(DynamoPackage).count()
+        count = DynamoPackage.count()
         self.assertEqual(count, 0)
-        count = self.engine.scan(PackageSummary).count()
+        count = PackageSummary.count()
         self.assertEqual(count, 0)
 
     def test_reload(self):
@@ -866,7 +870,7 @@ class TestDynamoCache(unittest.TestCase):
         ]
         self.storage.list.return_value = keys
         self.db.reload_from_storage()
-        all_pkgs = self.engine.scan(DynamoPackage).all()
+        all_pkgs = list(DynamoPackage.scan())
         self.assertCountEqual(all_pkgs, keys)
 
     def test_fetch(self):
@@ -980,28 +984,11 @@ class TestDynamoCache(unittest.TestCase):
             all_versions = self.db.all(name)
             self.assertEqual(len(all_versions), 2)
 
-    def test_clear_all_keep_throughput(self):
-        """Calling clear_all will keep same table throughput"""
-        throughput = {}
-        for model in (DynamoPackage, PackageSummary):
-            tablename = model.meta_.ddb_tablename(self.engine.namespace)
-            desc = self.dynamo.describe_table(tablename)
-            self.dynamo.update_table(desc.name, Throughput(7, 7))
-            for index in desc.global_indexes:
-                self.dynamo.update_table(
-                    desc.name, global_indexes={index.name: Throughput(7, 7)}
-                )
-
+    def test_clear_all(self):
+        """Calling clear_all recreates tables"""
         self.db.clear_all()
-
-        for model in (DynamoPackage, PackageSummary):
-            tablename = model.meta_.ddb_tablename(self.engine.namespace)
-            desc = self.dynamo.describe_table(tablename)
-            self.assertEqual(desc.throughput.read, 7)
-            self.assertEqual(desc.throughput.write, 7)
-            for index in desc.global_indexes:
-                self.assertEqual(index.throughput.read, 7)
-                self.assertEqual(index.throughput.write, 7)
+        self.assertTrue(DynamoPackage.exists())
+        self.assertTrue(PackageSummary.exists())
 
     def test_upload_no_summary(self):
         """upload() saves package even when there is no summary"""
@@ -1009,9 +996,9 @@ class TestDynamoCache(unittest.TestCase):
         self.db.upload(
             pkg.filename, BytesIO(b"test1234"), pkg.name, pkg.version, summary=""
         )
-        count = self.engine.scan(DynamoPackage).count()
+        count = DynamoPackage.count()
         self.assertEqual(count, 1)
-        saved_pkg = self.engine.scan(DynamoPackage).first()
+        saved_pkg = list(DynamoPackage.scan(limit=1))[0]
         self.assertEqual(saved_pkg, pkg)
         self.storage.upload.assert_called_with(pkg, ANY)
 
@@ -1022,12 +1009,7 @@ class TestDynamoCache(unittest.TestCase):
 
     def test_check_health_fail(self):
         """check_health returns False for bad connection"""
-        dbmock = self.db.engine = MagicMock()
-
-        def throw(*_, **__):
-            """Throw an exception"""
-            raise Exception("DB exception")
-
-        dbmock.scan.side_effect = throw
-        ok, msg = self.db.check_health()
-        self.assertFalse(ok)
+        with patch.object(DynamoPackage, 'scan', side_effect=Exception("DB exception")):
+            with patch.object(PackageSummary, 'scan', side_effect=Exception("DB exception")):
+                ok, msg = self.db.check_health()
+                self.assertFalse(ok)

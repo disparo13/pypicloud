@@ -1,70 +1,122 @@
 """ Store package data in DynamoDB """
+import json
 import logging
 from collections import defaultdict
 from datetime import datetime
 
-from dynamo3 import DynamoDBConnection
 from pkg_resources import parse_version
 from pyramid.settings import asbool, aslist
+from pynamodb.attributes import (
+    MapAttribute,
+    UnicodeAttribute,
+    UTCDateTimeAttribute,
+)
+from pynamodb.exceptions import DoesNotExist
+from pynamodb.indexes import AllProjection, GlobalSecondaryIndex
+from pynamodb.models import Model
+from pynamodb.constants import PAY_PER_REQUEST_BILLING_MODE
 
 from pypicloud.dateutil import UTC, utcnow
 from pypicloud.models import Package
 
 from .base import ICache
 
-try:
-    from flywheel import Engine, Field, GlobalIndex, Model, __version__
-
-    if parse_version(__version__) < parse_version("0.2.0"):  # pragma: no cover
-        raise ValueError("Pypicloud requires flywheel>=0.2.0")
-except ImportError as err:  # pragma: no cover
-    raise ImportError(
-        "You must 'pip install flywheel' before using " "DynamoDB as the cache database"
-    ) from err
-
 LOG = logging.getLogger(__name__)
 
 
+class _JSONAttribute(UnicodeAttribute):
+    """Store an arbitrary JSON-serialisable dict as a DynamoDB string."""
+
+    def serialize(self, value):
+        if value is None:
+            return None
+        return json.dumps(value, separators=(",", ":"))
+
+    def deserialize(self, value):
+        if not value:
+            return {}
+        return json.loads(value)
+
+
+class _NameIndex(GlobalSecondaryIndex):
+    """GSI on the *name* field, replacing flywheel's GlobalIndex('name-index', 'name')."""
+
+    class Meta:
+        index_name = "name-index"
+        projection = AllProjection()
+        billing_mode = PAY_PER_REQUEST_BILLING_MODE
+
+    name = UnicodeAttribute(hash_key=True)
+
+
 class DynamoPackage(Package, Model):
+    """Python package stored in DynamoDB."""
 
-    """Python package stored in DynamoDB"""
+    class Meta:
+        table_name = "DynamoPackage"
+        region = "us-east-1"
 
-    __metadata__ = {"global_indexes": [GlobalIndex("name-index", "name")]}
-    filename = Field(hash_key=True)
-    name = Field()
-    version = Field()
-    last_modified = Field(data_type=datetime)
-    summary = Field()
-    data = Field(data_type=dict)
+    filename = UnicodeAttribute(hash_key=True)
+    name = UnicodeAttribute()
+    version = UnicodeAttribute()
+    last_modified = UTCDateTimeAttribute()
+    summary = UnicodeAttribute(null=True)
+    data = _JSONAttribute(null=True)
+    name_index = _NameIndex()
 
     def __init__(self, *args, **kwargs):
-        super(DynamoPackage, self).__init__(*args, **kwargs)
-        # DynamoDB doesn't play nice with empty strings.
+        # When PynamoDB reconstructs instances from DynamoDB responses it calls
+        # _from_raw_data which bypasses __init__ entirely, so this path is only
+        # reached for user-created instances (via ICache.new_package).
+        Model.__init__(self)  # initialise PynamoDB internal state / defaults
+        Package.__init__(self, *args, **kwargs)  # normalise fields
         if not self.summary:
             self.summary = None
 
 
 class PackageSummary(Model):
+    """Aggregate data about packages."""
 
-    """Aggregate data about packages"""
+    class Meta:
+        table_name = "PackageSummary"
+        region = "us-east-1"
 
-    name = Field(hash_key=True)
-    summary = Field()
-    last_modified = Field(data_type=datetime)
+    name = UnicodeAttribute(hash_key=True)
+    summary = UnicodeAttribute(null=True)
+    last_modified = UTCDateTimeAttribute()
 
     def __init__(self, package):
-        super(PackageSummary, self).__init__(package.name)
+        super().__init__()
+        self.name = package.name
         self.last_modified = package.last_modified.replace(tzinfo=UTC)
-        self.summary = package.summary
+        self.summary = package.summary or None
+
+    def __json__(self):
+        return {
+            "name": self.name,
+            "summary": self.summary,
+            "last_modified": self.last_modified,
+        }
+
+
+def _apply_meta(region, host_url, access_key, secret_key):
+    """Push connection settings onto the PynamoDB model Meta classes."""
+    for model_cls in (DynamoPackage, PackageSummary):
+        if region:
+            model_cls.Meta.region = region
+        if host_url:
+            model_cls.Meta.host = host_url
+        if access_key:
+            model_cls.Meta.aws_access_key_id = access_key
+        if secret_key:
+            model_cls.Meta.aws_secret_access_key = secret_key
 
 
 class DynamoCache(ICache):
+    """Caching database that uses DynamoDB."""
 
-    """Caching database that uses DynamoDB"""
-
-    def __init__(self, request=None, engine=None, graceful_reload=False, **kwargs):
-        super(DynamoCache, self).__init__(request, **kwargs)
-        self.engine = engine
+    def __init__(self, request=None, graceful_reload=False, **kwargs):
+        super().__init__(request, **kwargs)
         self.graceful_reload = graceful_reload
 
     def new_package(self, *args, **kwargs):
@@ -72,7 +124,7 @@ class DynamoCache(ICache):
 
     @classmethod
     def configure(cls, settings):
-        kwargs = super(DynamoCache, cls).configure(settings)
+        kwargs = super().configure(settings)
 
         access_key = settings.get("db.aws_access_key_id")
         secret_key = settings.get("db.aws_secret_access_key")
@@ -80,124 +132,108 @@ class DynamoCache(ICache):
         host = settings.get("db.host")
         port = int(settings.get("db.port", 8000))
         secure = asbool(settings.get("db.secure", False))
-        namespace = settings.get("db.namespace", ())
+        namespace = settings.get("db.namespace", "")
         graceful_reload = asbool(settings.get("db.graceful_reload", False))
 
         tablenames = aslist(settings.get("db.tablenames", []))
         if tablenames:
             if len(tablenames) != 2:
                 raise ValueError("db.tablenames must be a 2-element list")
-            DynamoPackage.meta_.name = tablenames[0]
-            PackageSummary.meta_.name = tablenames[1]
+            DynamoPackage.Meta.table_name = tablenames[0]
+            PackageSummary.Meta.table_name = tablenames[1]
+        elif namespace:
+            DynamoPackage.Meta.table_name = "%s.DynamoPackage" % namespace
+            PackageSummary.Meta.table_name = "%s.PackageSummary" % namespace
 
         if host is not None:
-            connection = DynamoDBConnection.connect(
-                region,
-                host=host,
-                port=port,
-                is_secure=secure,
-                access_key=access_key,
-                secret_key=secret_key,
-            )
+            scheme = "https" if secure else "http"
+            host_url = "%s://%s:%d" % (scheme, host, port)
         elif region is not None:
-            connection = DynamoDBConnection.connect(
-                region, access_key=access_key, secret_key=secret_key
-            )
+            host_url = None
         else:
             raise ValueError("Must specify either db.region_name or db.host!")
-        kwargs["engine"] = engine = Engine(namespace=namespace, dynamo=connection)
-        kwargs["graceful_reload"] = graceful_reload
 
-        engine.register(DynamoPackage, PackageSummary)
+        _apply_meta(region, host_url, access_key, secret_key)
+
         LOG.info("Checking if DynamoDB tables exist")
-        engine.create_schema()
+        for model_cls in (DynamoPackage, PackageSummary):
+            if not model_cls.exists():
+                model_cls.create_table(
+                    wait=True, billing_mode=PAY_PER_REQUEST_BILLING_MODE
+                )
+
+        kwargs["graceful_reload"] = graceful_reload
         return kwargs
 
     def fetch(self, filename):
-        return self.engine.get(DynamoPackage, filename=filename)
+        try:
+            return DynamoPackage.get(filename)
+        except DoesNotExist:
+            return None
 
     def all(self, name):
-        return sorted(self.engine.query(DynamoPackage).filter(name=name), reverse=True)
+        return sorted(DynamoPackage.name_index.query(name), reverse=True)
 
     def distinct(self):
-        names = set()
-        for summary in self.engine.scan(PackageSummary):
-            names.add(summary.name)
-        return sorted(names)
+        return sorted({s.name for s in PackageSummary.scan()})
 
     def summary(self):
-        summaries = sorted(self.engine.scan(PackageSummary), key=lambda s: s.name)
-        return [s.__json__() for s in summaries]
+        return [s.__json__() for s in sorted(PackageSummary.scan(), key=lambda s: s.name)]
 
     def clear(self, package):
-        self.engine.delete(package)
+        package.delete()
         self._maybe_delete_summary(package.name)
 
     def _maybe_delete_summary(self, package_name):
-        """Check for any package with the name. Delete summary if 0"""
-        remaining = (
-            self.engine(DynamoPackage)
-            .filter(DynamoPackage.name == package_name)
-            .scan_limit(1)
-            .count()
-        )
-        if remaining == 0:
+        """Delete the PackageSummary if no packages with that name remain."""
+        remaining = list(DynamoPackage.name_index.query(package_name, limit=1))
+        if not remaining:
             LOG.info("Removing package summary %s", package_name)
-            self.engine.delete_key(PackageSummary, name=package_name)
+            try:
+                PackageSummary.get(package_name).delete()
+            except DoesNotExist:
+                pass
 
     def clear_all(self):
-        # We're replacing the schema, so make sure we save and restore the
-        # current table/index throughput
-        throughput = {}
-        for model in (DynamoPackage, PackageSummary):
-            tablename = model.meta_.ddb_tablename(self.engine.namespace)
-            desc = self.engine.dynamo.describe_table(tablename)
-            tablename = model.meta_.ddb_tablename()
-            throughput[tablename] = {
-                "read": desc.throughput.read,
-                "write": desc.throughput.write,
-            }
-            for index in desc.global_indexes:
-                throughput[tablename][index.name] = {
-                    "read": index.throughput.read,
-                    "write": index.throughput.write,
-                }
-
-        self.engine.delete_schema()
-        self.engine.create_schema(throughput=throughput)
+        # NOTE: unlike the flywheel implementation, throughput settings are not
+        # preserved across the delete/recreate cycle.  Tables are recreated
+        # with PAY_PER_REQUEST billing.  If you rely on provisioned throughput,
+        # restore it manually after calling clear_all().
+        for model_cls in (DynamoPackage, PackageSummary):
+            if model_cls.exists():
+                model_cls.delete_table()
+        DynamoPackage.create_table(wait=True, billing_mode=PAY_PER_REQUEST_BILLING_MODE)
+        PackageSummary.create_table(wait=True, billing_mode=PAY_PER_REQUEST_BILLING_MODE)
 
     def save(self, package):
         summary = PackageSummary(package)
-        self.engine.save([package, summary], overwrite=True)
+        package.save()
+        summary.save()
 
     def reload_from_storage(self, clear=True):
         if not self.graceful_reload:
-            return super(DynamoCache, self).reload_from_storage(clear)
+            return super().reload_from_storage(clear)
         LOG.info("Rebuilding cache from storage")
-        # Log start time
         start = utcnow()
-        # Fetch packages from storage s1
+
         s1 = set(self.storage.list(self.new_package))
-        # Fetch cache packages c1
-        c1 = set(self.engine.scan(DynamoPackage))
-        # Add missing packages to cache (s1 - c1)
+        c1 = set(DynamoPackage.scan())
+
         missing = s1 - c1
         if missing:
             LOG.info("Adding %d missing packages to cache", len(missing))
-            self.engine.save(missing)
-        # Delete extra packages from cache (c1 - s1) when last_modified < start
-        # The time filter helps us avoid deleting packages that were
-        # concurrently uploaded.
+            with DynamoPackage.batch_write() as batch:
+                for pkg in missing:
+                    batch.save(pkg)
+
         extra1 = [p for p in (c1 - s1) if p.last_modified < start]
         if extra1:
             LOG.info("Removing %d extra packages from cache", len(extra1))
-            self.engine.delete(extra1)
+            with DynamoPackage.batch_write() as batch:
+                for pkg in extra1:
+                    batch.delete(pkg)
 
-        # If any packages were concurrently deleted during the cache rebuild,
-        # we can detect them by polling storage again and looking for any
-        # packages that were present in s1 and are missing from s2
         s2 = set(self.storage.list(self.new_package))
-        # Delete extra packages from cache (s1 - s2)
         extra2 = s1 - s2
         if extra2:
             LOG.info(
@@ -205,22 +241,18 @@ class DynamoCache(ICache):
                 "deleted during rebuild",
                 len(extra2),
             )
-            self.engine.delete(extra2)
-            # Remove these concurrently-deleted files from the list of packages
-            # that were missing from the cache. Don't want to use those to
-            # update the summaries below.
+            with DynamoPackage.batch_write() as batch:
+                for pkg in extra2:
+                    batch.delete(pkg)
             missing -= extra2
 
-        # Update the PackageSummary for added packages
         packages_by_name = defaultdict(list)
         for package in missing:
-            # Set the tz here so we can compare against the PackageSummary
             package.last_modified = package.last_modified.replace(tzinfo=UTC)
             packages_by_name[package.name].append(package)
-        summaries = self.engine.get(PackageSummary, packages_by_name.keys())
-        summaries_by_name = {}
-        for summary in summaries:
-            summaries_by_name[summary.name] = summary
+
+        summaries = list(PackageSummary.batch_get(packages_by_name.keys()))
+        summaries_by_name = {s.name: s for s in summaries}
         for name, packages in packages_by_name.items():
             if name in summaries_by_name:
                 summary = summaries_by_name[name]
@@ -233,21 +265,18 @@ class DynamoCache(ICache):
                     summary.summary = package.summary
         if summaries:
             LOG.info("Updating %d package summaries", len(summaries))
-            self.engine.save(summaries, overwrite=True)
+            with PackageSummary.batch_write() as batch:
+                for summary in summaries:
+                    batch.save(summary)
 
-        # Remove the PackageSummary for deleted packages
-        removed = set()
-        for package in extra1:
-            removed.add(package.name)
-        for package in extra2:
-            removed.add(package.name)
+        removed = {pkg.name for pkg in extra1} | {pkg.name for pkg in extra2}
         for name in removed:
             self._maybe_delete_summary(name)
 
     def check_health(self):
         try:
-            self.engine.scan(PackageSummary).first()
+            list(PackageSummary.scan(limit=1))
         except Exception as e:
             return False, str(e)
-        else:
-            return True, ""
+        return True, ""
+

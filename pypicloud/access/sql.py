@@ -12,8 +12,7 @@ from sqlalchemy import (
     orm,
 )
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import backref, sessionmaker
+from sqlalchemy.orm import backref, declarative_base, sessionmaker
 
 from pypicloud.util import EnvironSettings
 
@@ -162,10 +161,11 @@ class SQLAccessBackend(IMutableAccessBackend):
 
     """
 
-    def __init__(self, request=None, dbmaker=None, **kwargs):
+    def __init__(self, request=None, dbmaker=None, engine=None, **kwargs):
         super(SQLAccessBackend, self).__init__(request, **kwargs)
         self._db = None
         self._dbmaker = dbmaker
+        self._engine = engine
 
     @property
     def db(self):
@@ -186,16 +186,17 @@ class SQLAccessBackend(IMutableAccessBackend):
             resolver = DottedNameResolver(__name__)
             engine_opts["poolclass"] = resolver.maybe_resolve(poolclass)
         engine = engine_from_config(settings, prefix="auth.db.", **engine_opts)
-        kwargs["dbmaker"] = sessionmaker(bind=engine)
+        kwargs["dbmaker"] = sessionmaker(engine)
+        kwargs["engine"] = engine
         # Create SQL schema if not exists
-        Base.metadata.create_all(bind=engine)
+        Base.metadata.create_all(engine)
         return kwargs
 
     @classmethod
     def postfork(cls, **kwargs):
         # Have to dispose of connections after uWSGI forks,
         # otherwise they'll get corrupted.
-        kwargs["dbmaker"].kw["bind"].dispose()
+        kwargs["engine"].dispose()
 
     def allow_register(self):
         ret = self.db.query(KeyVal).filter_by(key="allow_register").first()

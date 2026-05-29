@@ -5,7 +5,7 @@ import traceback
 from pyramid.httpexceptions import HTTPException, HTTPServerError
 from pyramid.settings import asbool
 from pyramid.view import view_config
-from pyramid_duh import addslash
+from pypicloud.compat import addslash
 
 from pypicloud import __version__
 from pypicloud.route import Root

@@ -15,7 +15,7 @@ from pyramid.httpexceptions import (
 )
 from pyramid.security import NO_PERMISSION_REQUIRED
 from pyramid.view import view_config
-from pyramid_duh import addslash, argify
+from pypicloud.compat import addslash, argify
 from smart_open import open as _open
 
 from pypicloud.route import (

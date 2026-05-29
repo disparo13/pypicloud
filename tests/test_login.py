@@ -1,5 +1,5 @@
 """ Tests for login views """
-from mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 from pyramid.testing import DummyRequest
 
 from pypicloud.views import login

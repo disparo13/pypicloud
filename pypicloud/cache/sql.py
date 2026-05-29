@@ -16,7 +16,7 @@ from sqlalchemy import (
     or_,
 )
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.ext.mutable import Mutable
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
@@ -103,9 +103,9 @@ class SQLPackage(Package, Base):
     """Python package stored in SQLAlchemy"""
 
     __tablename__ = "packages"
-    filename = Column(String(255, convert_unicode=True), primary_key=True)
-    name = Column(String(255, convert_unicode=True), index=True, nullable=False)
-    version = Column(String(1000, convert_unicode=True), nullable=False)
+    filename = Column(String(255), primary_key=True)
+    name = Column(String(255), index=True, nullable=False)
+    version = Column(String(1000), nullable=False)
     last_modified = Column(TZAwareDateTime(), index=True, nullable=False)
     # TEXT, as pypi does the same, and using String(N) would mismatch with pypi
     summary = Column(Text(), nullable=True)
@@ -126,7 +126,7 @@ def create_schema(engine):
     models which extend the ``Base`` object.
 
     """
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(engine)
 
 
 def drop_schema(engine):
@@ -143,16 +143,17 @@ def drop_schema(engine):
     models which extend the ``Base`` object.
 
     """
-    Base.metadata.drop_all(bind=engine)
+    Base.metadata.drop_all(engine)
 
 
 class SQLCache(ICache):
 
     """Caching database that uses SQLAlchemy"""
 
-    def __init__(self, request=None, dbmaker=None, graceful_reload=False, **kwargs):
+    def __init__(self, request=None, dbmaker=None, engine=None, graceful_reload=False, **kwargs):
         super(SQLCache, self).__init__(request, **kwargs)
         self.dbmaker = dbmaker
+        self.engine = engine
         self.db = self.dbmaker()
         self.graceful_reload = graceful_reload
 
@@ -181,7 +182,8 @@ class SQLCache(ICache):
         engine = engine_from_config(settings, prefix="db.", **engine_opts)
         # Create SQL schema if not exists
         create_schema(engine)
-        kwargs["dbmaker"] = sessionmaker(bind=engine)
+        kwargs["dbmaker"] = sessionmaker(engine)
+        kwargs["engine"] = engine
         kwargs["graceful_reload"] = graceful_reload
         return kwargs
 
@@ -189,7 +191,7 @@ class SQLCache(ICache):
     def postfork(cls, **kwargs):
         # Have to dispose of connections after uWSGI forks,
         # otherwise they'll get corrupted.
-        kwargs["dbmaker"].kw["bind"].dispose()
+        kwargs["engine"].dispose()
 
     def fetch(self, filename):
         return self.db.query(SQLPackage).filter_by(filename=filename).first()
@@ -295,9 +297,8 @@ class SQLCache(ICache):
             self.db.rollback()
         else:
             self.request.tm.abort()
-        engine = self.dbmaker.kw["bind"]
-        drop_schema(engine)
-        create_schema(engine)
+        drop_schema(self.engine)
+        create_schema(self.engine)
 
     def save(self, package):
         self.db.merge(package)

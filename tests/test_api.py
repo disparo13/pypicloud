@@ -1,7 +1,7 @@
 """ Tests for API endpoints """
 from io import BytesIO
 
-from mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 from pyramid.httpexceptions import HTTPBadRequest, HTTPForbidden
 from pyramid.testing import DummyRequest
 

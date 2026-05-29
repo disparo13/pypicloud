@@ -1,7 +1,7 @@
 """ Tests for auth methods """
 from base64 import b64encode
 
-from mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 from pyramid.testing import DummyRequest
 
 from pypicloud import auth

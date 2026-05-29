@@ -5,8 +5,10 @@ import posixpath
 import pkg_resources
 from pyramid.httpexceptions import HTTPBadRequest, HTTPConflict, HTTPFound, HTTPNotFound
 from pyramid.view import view_config
-from pyramid_duh import addslash, argify
-from pyramid_rpc.xmlrpc import xmlrpc_method
+import xmlrpc.client
+
+from pyramid.response import Response
+from pypicloud.compat import addslash, argify
 
 from pypicloud.route import Root, SimplePackageResource, SimpleResource
 from pypicloud.util import (
@@ -51,19 +53,30 @@ def upload(
         return HTTPBadRequest("Unknown action '%s'" % action)
 
 
-@xmlrpc_method(endpoint="pypi")
-@xmlrpc_method(endpoint="pypi_slash")
-def search(request, criteria, query_type):
-    """
-    Perform searches from pip. This handles XML RPC requests to the "pypi"
-    endpoint (configured as /pypi/) that specify the method "search".
+@view_config(route_name="xmlrpc_pypi", request_method="POST")
+@view_config(route_name="xmlrpc_pypi_slash", request_method="POST")
+def xmlrpc_handler(request):
+    """Handle XML-RPC requests (pip search) at /pypi and /pypi/."""
+    try:
+        params, method = xmlrpc.client.loads(request.body)
+    except Exception:
+        return HTTPBadRequest("Invalid XML-RPC request")
 
-    """
-    filtered = []
-    for pkg in request.db.search(criteria, query_type):
-        if request.access.has_permission(pkg.name, "read"):
-            filtered.append(pkg.search_summary())
-    return filtered
+    if method == "search":
+        try:
+            criteria, query_type = params
+        except (TypeError, ValueError):
+            return HTTPBadRequest("Invalid parameters for XML-RPC 'search'")
+        filtered = []
+        for pkg in request.db.search(criteria, query_type):
+            if request.access.has_permission(pkg.name, "read"):
+                filtered.append(pkg.search_summary())
+        body = xmlrpc.client.dumps((filtered,), methodresponse=True)
+    else:
+        fault = xmlrpc.client.Fault(-32601, "Method '%s' not found" % method)
+        body = xmlrpc.client.dumps(fault)
+
+    return Response(body, content_type="text/xml")
 
 
 @view_config(

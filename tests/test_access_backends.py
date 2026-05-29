@@ -6,7 +6,7 @@ import unittest
 
 import transaction
 import zope.sqlalchemy
-from mock import MagicMock, PropertyMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 from pyramid import testing
 from pyramid.authorization import ACLAuthorizationPolicy
 from pyramid.security import Authenticated, Everyone

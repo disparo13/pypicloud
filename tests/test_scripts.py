@@ -1,7 +1,7 @@
 """ Tests for commandline scripts """
 import unittest
 
-from mock import patch
+from unittest.mock import patch
 
 from pypicloud import scripts
 

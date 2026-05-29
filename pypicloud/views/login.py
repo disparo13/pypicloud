@@ -2,7 +2,7 @@
 from pyramid.httpexceptions import HTTPForbidden, HTTPFound
 from pyramid.security import NO_PERMISSION_REQUIRED, forget, remember
 from pyramid.view import view_config
-from pyramid_duh import argify
+from pypicloud.compat import argify
 
 from pypicloud.route import AccountResource
 

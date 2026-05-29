@@ -1,5 +1,5 @@
 azure-storage-blob
-flywheel
+pynamodb
 google-cloud-storage
 numpydoc
 psycopg2-binary

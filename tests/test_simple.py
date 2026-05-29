@@ -3,7 +3,7 @@ import unittest
 from io import BytesIO
 from types import MethodType
 
-from mock import MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from pypicloud.auth import _request_login
 from pypicloud.views.simple import (

@@ -16,8 +16,8 @@ from azure.core.exceptions import ResourceExistsError
 from botocore.exceptions import ClientError
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from mock import ANY, MagicMock, patch
-from moto import mock_s3
+from unittest.mock import ANY, MagicMock, patch
+from moto import mock_aws
 
 from pypicloud.models import Package
 from pypicloud.storage import (
@@ -38,7 +38,7 @@ class TestS3Storage(unittest.TestCase):
 
     def setUp(self):
         super(TestS3Storage, self).setUp()
-        self.s3_mock = mock_s3()
+        self.s3_mock = mock_aws()
         self.s3_mock.start()
         self.settings = EnvironSettings(
             {
@@ -241,7 +241,7 @@ class TestCloudFrontS3Storage(unittest.TestCase):
 
     def setUp(self):
         super(TestCloudFrontS3Storage, self).setUp()
-        self.s3_mock = mock_s3()
+        self.s3_mock = mock_aws()
         self.s3_mock.start()
         self.settings = EnvironSettings(
             {

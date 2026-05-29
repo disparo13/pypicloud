@@ -3,7 +3,7 @@ import os
 import unittest
 from collections import defaultdict
 
-from mock import MagicMock
+from unittest.mock import MagicMock
 from pyramid.testing import DummyRequest
 
 from pypicloud.access import IAccessBackend

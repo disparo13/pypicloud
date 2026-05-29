@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        toxenv: [py37, py38, py39, lint]
+        toxenv: [py311, py312, py313, py314, lint]
 
     steps:
     - uses: actions/checkout@v1
@@ -18,7 +18,7 @@ jobs:
     - name: Run test
       run: ./compose run tox -e ${{ matrix.toxenv }}
     - name: Publish coverage
-      if: ${{ matrix.toxenv == 'py38' }}
+      if: ${{ matrix.toxenv == 'py312' }}
       run: ./compose run tox -e coveralls
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
